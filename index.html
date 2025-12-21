@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>教育部載具使用狀況分析工具</title>
+    <!-- 引入 Tailwind CSS 進行樣式設計 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 PapaParse 用於解析 CSV -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <!-- 引入 SheetJS 用於解析 Excel -->
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    <!-- 引入 Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        body {
+            font-family: 'Noto Sans TC', sans-serif;
+            background-color: #f3f4f6;
+        }
+        .drag-active {
+            border-color: #3b82f6;
+            background-color: #eff6ff;
+        }
+        th {
+            user-select: none; /* 防止連點時選取文字 */
+        }
+    </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+
+    <div class="bg-white rounded-xl shadow-lg w-full max-w-5xl overflow-hidden">
+        <!-- 標題區 -->
+        <div class="bg-blue-600 p-6 text-white">
+            <h1 class="text-2xl font-bold flex items-center gap-2">
+                <i data-lucide="monitor-x" class="w-8 h-8"></i>
+                載具使用狀況分析工具
+            </h1>
+            <p class="text-blue-100 mt-2 text-sm">教育部載具配發案：快速篩選當月未使用設備名單 (內建序號對照 + 可排序)</p>
+        </div>
+
+        <div class="p-8 space-y-8">
+            
+            <div class="grid md:grid-cols-2 gap-6">
+                <!-- 步驟 1: 設定 -->
+                <div class="space-y-4">
+                    <div class="space-y-2">
+                        <label class="block text-sm font-medium text-gray-700 bg-gray-100 p-2 rounded">1. 選擇報表月份（基準日）</label>
+                        <input type="month" id="reportMonth" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" value="2025-12">
+                        <p class="text-xs text-gray-500">篩選出此月份 1號 之前連線的載具。</p>
+                    </div>
+
+                    <div class="space-y-2">
+                        <label class="block text-sm font-medium text-gray-700 bg-gray-100 p-2 rounded">2. 上傳載具清單 (Excel/CSV)</label>
+                        <div id="dropZone" class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center cursor-pointer hover:border-blue-400 transition relative bg-gray-50">
+                            <input type="file" id="fileInput" accept=".csv, .xlsx, .xls" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
+                            <div class="pointer-events-none">
+                                <i data-lucide="upload-cloud" class="w-8 h-8 text-gray-400 mx-auto mb-2"></i>
+                                <p class="text-sm text-gray-600" id="fileName">點擊或拖曳檔案 (.xlsx, .csv)</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 說明區塊 -->
+                <div class="bg-blue-50 p-4 rounded-lg border border-blue-100 flex flex-col justify-center">
+                    <h3 class="font-bold text-blue-800 mb-2 flex items-center gap-2">
+                        <i data-lucide="info" class="w-4 h-4"></i>
+                        功能說明
+                    </h3>
+                    <ul class="text-sm text-blue-700 space-y-1 list-disc list-inside">
+                        <li>已內建 A1-E30 的序號對照表。</li>
+                        <li><strong>新功能：</strong>點擊下方表格的標題（如「自訂編號」）可進行排序。</li>
+                        <li>自訂編號採用智慧排序（例如 A2 會排在 A10 前面）。</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- 按鈕區 -->
+            <button id="analyzeBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-lg shadow transition transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                <i data-lucide="search"></i>
+                開始分析
+            </button>
+
+            <!-- 錯誤訊息 -->
+            <div id="errorMessage" class="hidden p-4 bg-red-50 border-l-4 border-red-500 text-red-700 rounded"></div>
+
+            <!-- 結果區 (預設隱藏) -->
+            <div id="resultArea" class="hidden space-y-6 animate-fade-in">
+                <div class="grid grid-cols-3 gap-4">
+                    <div class="bg-gray-50 p-4 rounded-lg text-center border">
+                        <div class="text-sm text-gray-500">總載具數</div>
+                        <div class="text-2xl font-bold text-gray-800" id="totalCount">0</div>
+                    </div>
+                    <div class="bg-red-50 p-4 rounded-lg text-center border border-red-100">
+                        <div class="text-sm text-red-600 font-bold">未使用載具數</div>
+                        <div class="text-3xl font-bold text-red-600" id="unusedCount">0</div>
+                    </div>
+                    <div class="bg-green-50 p-4 rounded-lg text-center border border-green-100">
+                        <div class="text-sm text-green-600">使用率</div>
+                        <div class="text-2xl font-bold text-green-600" id="usageRate">0%</div>
+                    </div>
+                </div>
+
+                <!-- 下載按鈕 -->
+                <button id="downloadBtn" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 rounded-lg shadow transition flex items-center justify-center gap-2">
+                    <i data-lucide="download"></i>
+                    下載未使用名單 (.csv)
+                </button>
+
+                <!-- 預覽表格 -->
+                <div class="border rounded-lg overflow-hidden flex flex-col">
+                    <div class="bg-gray-100 px-4 py-2 border-b font-medium text-gray-700 text-sm flex justify-between items-center">
+                        <span>未使用的載具清單 (點擊標題可排序)</span>
+                        <span class="text-xs text-gray-500" id="listCountHint"></span>
+                    </div>
+                    <div class="overflow-x-auto overflow-y-auto max-h-[600px]">
+                        <table class="min-w-full divide-y divide-gray-200 relative">
+                            <thead class="bg-gray-50 sticky top-0 z-10 shadow-sm">
+                                <tr>
+                                    <!-- 加入 onclick 事件 -->
+                                    <th class="px-4 py-3 text-left text-xs font-bold text-blue-800 uppercase tracking-wider bg-blue-50 cursor-pointer hover:bg-blue-100 transition group" onclick="handleSort('自訂名稱')">
+                                        <div class="flex items-center gap-1">
+                                            自訂編號 
+                                            <span id="sort-icon-自訂名稱" class="text-gray-400 group-hover:text-blue-600"><i data-lucide="arrow-up-down" class="w-3 h-3"></i></span>
+                                        </div>
+                                    </th>
+                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50 cursor-pointer hover:bg-gray-100 transition group" onclick="handleSort('_std_school')">
+                                        <div class="flex items-center gap-1">
+                                            學校名稱
+                                            <span id="sort-icon-_std_school" class="text-gray-400 group-hover:text-gray-600"><i data-lucide="arrow-up-down" class="w-3 h-3"></i></span>
+                                        </div>
+                                    </th>
+                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50 cursor-pointer hover:bg-gray-100 transition group" onclick="handleSort('_std_sn')">
+                                        <div class="flex items-center gap-1">
+                                            序號 (SN)
+                                            <span id="sort-icon-_std_sn" class="text-gray-400 group-hover:text-gray-600"><i data-lucide="arrow-up-down" class="w-3 h-3"></i></span>
+                                        </div>
+                                    </th>
+                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50 cursor-pointer hover:bg-gray-100 transition group" onclick="handleSort('_std_date')">
+                                        <div class="flex items-center gap-1">
+                                            最後連線
+                                            <span id="sort-icon-_std_date" class="text-gray-400 group-hover:text-gray-600"><i data-lucide="arrow-up-down" class="w-3 h-3"></i></span>
+                                        </div>
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody id="previewBody" class="bg-white divide-y divide-gray-200">
+                                <!-- JS 插入內容 -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        // 初始化圖示
+        lucide.createIcons();
+
+        // --- 內建序號對照表 ---
+        const builtinMapping = {
+            // Group A
+            "N5NXLP038245215": "A1", "N5NXLP03830421E": "A2", "N5NXLP03831521G": "A3", "N5NXLP038376219": "A4", "N5NXLP03842921C": "A5",
+            "N5NXLP03843121B": "A6", "N5NXLP038453216": "A7", "N5NXLP038456219": "A8", "N5NXLP03847321D": "A9", "N5NXLP038477217": "A10",
+            "N5NXLP038510216": "A11", "N5NXLP03854421D": "A12", "N5NXLP038558212": "A13", "N5NXLP03860621G": "A14", "N5NXLP038623212": "A15",
+            "N5NXLP03863321C": "A16", "N5NXLP03866621B": "A17", "N5NXLP03868321E": "A18", "N5NXLP03869221B": "A19", "N5NXLP03871121E": "A20",
+            "N5NXLP03875421C": "A21", "N5NXLP038792212": "A22", "N5NXLP03883021C": "A23", "N5NXLP03885121D": "A24", "N5NXLP038882218": "A25",
+            "N5NXLP03890121D": "A26", "N5NXLP038905216": "A27", "N5NXLP038929213": "A28", "N5NXLP03893521G": "A29", "N5NXLP038967216": "A30",
+            // Group B
+            "N5NXLP03898821B": "B1", "N5NXLP03899521A": "B2", "N5NXLP03900621H": "B3", "N5NXLP03901421C": "B4", "N5NXLP039015219": "B5",
+            "N5NXLP039068216": "B6", "N5NXLP03908921F": "B7", "N5NXLP039150216": "B8", "N5NXLP039218213": "B9", "N5NXLP03927921B": "B10",
+            "N5NXLP039280217": "B11", "N5NXLP03936821D": "B12", "N5NXLP03937821E": "B13", "N5NXLP039398217": "B14", "N5NXLP03943121B": "B15",
+            "N5NXLP03951321A": "B16", "N5NXLP03957921A": "B17", "N5NXLP039580214": "B18", "N5NXLP039652216": "B19", "N5NXLP03966221E": "B20",
+            "N5NXLP03969521D": "B21", "N5NXLP03943821A": "B22", "N5NXLP03974521C": "B23", "N5NXLP039796213": "B24", "N5NXLP03980721D": "B25",
+            "N5NXLP039863218": "B26", "N5NXLP039937218": "B27", "N5NXLP03A066214": "B28", "N5NXLP03A094215": "B29", "N5NXLP03A131215": "B30",
+            // Group C
+            "N5NXLP03A14621E": "C1", "N5NXLP03A196212": "C2", "N5NXLP03A228213": "C3", "N5NXLP03A280217": "C4", "N5NXLP03A291214": "C5",
+            "N5NXLP03A293215": "C6", "N5NXLP03A30421E": "C7", "N5NXLP03A385215": "C8", "N5NXLP03A40121F": "C9", "N5NXLP03A44421E": "C10",
+            "N5NXLP03A463219": "C11", "N5NXLP03A474211": "C12", "N5NXLP03A518214": "C13", "N5NXLP03A52621D": "C14", "N5NXLP03A530213": "C15",
+            "N5NXLP03A552219": "C16", "N5NXLP03A557216": "C17", "N5NXLP03A60721G": "C18", "N5NXLP03A61221A": "C19", "N5NXLP03A61521G": "C20",
+            "N5NXLP03A619218": "C21", "N5NXLP03A621217": "C22", "N5NXLP03A62521D": "C23", "N5NXLP03A63321C": "C24", "N5NXLP03A635211": "C25",
+            "N5NXLP03A645218": "C26", "N5NXLP03A655215": "C27", "N5NXLP03A67621D": "C28", "N5NXLP03A75421C": "C29", "N5NXLP03A777212": "C30",
+            // Group D
+            "N6NXLP01S433244": "D1", "N6NXLP01S487248": "D2", "N6NXLP01S60524C": "D3", "N6NXLP01S617242": "D4", "N6NXLP01S73524G": "D5",
+            "N6NXLP01S77324H": "D6", "N6NXLP01S77624D": "D7", "N6NXLP01S828249": "D8", "N6NXLP01X49824A": "D9", "N6NXLP01X51924G": "D10",
+            "N6NXLP01X64024A": "D11", "N6NXLP01X672242": "D12", "N6NXLP01X70424C": "D13", "N6NXLP01X89524B": "D14", "N6NXLP01X99624A": "D15",
+            "N6NXLP03S52225B": "D16", "N6NXLP03S53125B": "D17", "N6NXLP03S64225C": "D18", "N6NXLP03S657258": "D19", "N6NXLP03S660256": "D20",
+            "N6NXLP03S686256": "D21", "N6NXLP03S688258": "D22", "N6NXLP03S689253": "D23", "N6NXLP03S70925A": "D24", "N6NXLP03S734256": "D25",
+            "N6NXLP03T000258": "D26", "N6NXLP03T02625F": "D27", "N6NXLP03T043255": "D28", "N6NXLP03T05225D": "D29", "N6NXLP03T078253": "D30",
+            // Group E
+            "N6NXLP03T10425E": "E1", "N6NXLP03T123258": "E2", "N6NXLP03T18025G": "E3", "N6NXLP03T205254": "E4", "N6NXLP03T208254": "E5",
+            "N6NXLP03T238254": "E6", "N6NXLP03T24125E": "E7", "N6NXLP03T248257": "E8", "N6NXLP03T252253": "E9", "N6NXLP03T27125D": "E10",
+            "N6NXLP03T30425A": "E11", "N6NXLP03T341259": "E12", "N6NXLP03T34625B": "E13", "N6NXLP03T361256": "E14", "N6NXLP03T36625B": "E15",
+            "N6NXLP03T386251": "E16", "N6NXLP03T41225D": "E17", "N6NXLP03T413259": "E18", "N6NXLP03Z546254": "E19", "N6NXLP03Z595256": "E20",
+            "N6NXLP03Z650258": "E21", "N6NXLP03Z665255": "E22", "N6NXLP03Z666256": "E23", "N6NXLP03Z74525A": "E24", "N6NXLP03Z789256": "E25",
+            "N6NXLP03Z80325E": "E26", "N6NXLP03Z80625D": "E27", "N6NXLP03Z83025B": "E28", "N6NXLP03Z84925A": "E29", "N6NXLP03Z87925D": "E30"
+        };
+        // -----------------------------
+
+        const fileInput = document.getElementById('fileInput');
+        const dropZone = document.getElementById('dropZone');
+        const fileNameDisplay = document.getElementById('fileName');
+        const analyzeBtn = document.getElementById('analyzeBtn');
+        const resultArea = document.getElementById('resultArea');
+        const errorMessage = document.getElementById('errorMessage');
+        const downloadBtn = document.getElementById('downloadBtn');
+        
+        let unusedDevices = [];
+        let deviceMapping = builtinMapping; 
+        
+        // 排序狀態
+        let currentSort = { key: '自訂名稱', order: 'asc' };
+
+        // 拖曳效果
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, preventDefaults, false);
+        });
+
+        function preventDefaults(e) { e.preventDefault(); e.stopPropagation(); }
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropZone.addEventListener(eventName, () => dropZone.classList.add('drag-active'), false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, () => dropZone.classList.remove('drag-active'), false);
+        });
+
+        dropZone.addEventListener('drop', handleDrop, false);
+
+        function handleDrop(e) {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            handleFiles(files);
+        }
+
+        fileInput.addEventListener('change', function() { handleFiles(this.files); });
+
+        function handleFiles(files) {
+            if (files.length > 0) {
+                const file = files[0];
+                const validTypes = ['.csv', '.xlsx', '.xls'];
+                const isExcel = file.name.endsWith('.xlsx') || file.name.endsWith('.xls');
+                const isCsv = file.name.endsWith('.csv');
+                
+                if (!isExcel && !isCsv) {
+                    showError("請上傳 .csv, .xlsx 或 .xls 格式的檔案");
+                    return;
+                }
+                fileNameDisplay.textContent = `已選擇: ${file.name}`;
+                fileNameDisplay.classList.add('text-blue-600', 'font-medium');
+                hideError();
+            }
+        }
+
+        analyzeBtn.addEventListener('click', function() {
+            const files = fileInput.files;
+            if (files.length === 0) {
+                showError("請先選擇或拖曳檔案");
+                return;
+            }
+            
+            const file = files[0];
+            const reportMonth = document.getElementById('reportMonth').value;
+
+            if (!reportMonth) {
+                showError("請選擇報表月份");
+                return;
+            }
+
+            const [year, month] = reportMonth.split('-');
+            const cutoffDate = new Date(year, month - 1, 1); 
+
+            analyzeBtn.textContent = "分析中...";
+            analyzeBtn.disabled = true;
+
+            if (file.name.endsWith('.csv')) {
+                parseCSV(file, cutoffDate, reportMonth);
+            } else {
+                parseExcel(file, cutoffDate, reportMonth);
+            }
+        });
+
+        function parseCSV(file, cutoffDate, reportMonth) {
+            Papa.parse(file, {
+                header: true,
+                skipEmptyLines: true,
+                complete: function(results) {
+                    try {
+                        processData(results.data, cutoffDate, reportMonth);
+                    } catch (err) {
+                        showError("分析錯誤：" + err.message);
+                    } finally {
+                        resetBtn();
+                    }
+                },
+                error: function(err) {
+                    showError("CSV 解析錯誤：" + err.message);
+                    resetBtn();
+                }
+            });
+        }
+
+        function parseExcel(file, cutoffDate, reportMonth) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const data = new Uint8Array(e.target.result);
+                    const workbook = XLSX.read(data, { type: 'array', cellDates: true, cellNF: false, cellText: false });
+                    const firstSheetName = workbook.SheetNames[0];
+                    const worksheet = workbook.Sheets[firstSheetName];
+                    const jsonData = XLSX.utils.sheet_to_json(worksheet, { raw: true, defval: "" });
+                    processData(jsonData, cutoffDate, reportMonth);
+                } catch (err) {
+                    console.error(err);
+                    showError("Excel 解析錯誤：" + err.message);
+                } finally {
+                    resetBtn();
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        function resetBtn() {
+            analyzeBtn.innerHTML = '<i data-lucide="search"></i> 開始分析';
+            lucide.createIcons();
+            analyzeBtn.disabled = false;
+        }
+
+        function processData(data, cutoffDate, reportMonthStr) {
+            unusedDevices = [];
+            let totalDevices = data.length;
+            
+            const colMap = {
+                lastConnection: ['最後連線', '最後連線時間', 'Last Connection', 'last_connection'],
+                schoolName: ['學校名稱', 'School Name', 'school_name'],
+                model: ['載具型號', 'Model', 'Device Model'],
+                sn: ['serialNumber', 'Serial Number', 'SN', '序號', 'serial_number'],
+            };
+
+            const findKey = (row, keys) => keys.find(k => Object.prototype.hasOwnProperty.call(row, k));
+
+            data.forEach(row => {
+                const connKey = findKey(row, colMap.lastConnection);
+                const snKey = findKey(row, colMap.sn);
+                const rawVal = connKey ? row[connKey] : null;
+                const snVal = snKey ? String(row[snKey]).trim() : "";
+                
+                let isUnused = false;
+
+                // 判斷是否使用
+                if (!rawVal) {
+                    isUnused = true;
+                } else if (typeof rawVal === 'string' && rawVal.trim() === "") {
+                    isUnused = true;
+                } else {
+                    let deviceDate;
+                    if (rawVal instanceof Date) {
+                        deviceDate = rawVal;
+                    } else {
+                        const dateStr = String(rawVal).replace(/-/g, '/'); 
+                        deviceDate = new Date(dateStr);
+                    }
+                    if (isNaN(deviceDate.getTime())) {
+                        isUnused = true; 
+                    } else if (deviceDate < cutoffDate) {
+                        isUnused = true;
+                    }
+
+                    // 格式化日期以便輸出
+                    if (connKey && !isUnused && rawVal instanceof Date) {
+                         // 已使用的我們不輸出
+                    } else if (isUnused && connKey && rawVal instanceof Date) {
+                         const y = rawVal.getFullYear();
+                         const m = String(rawVal.getMonth() + 1).padStart(2, '0');
+                         const d = String(rawVal.getDate()).padStart(2, '0');
+                         const hh = String(rawVal.getHours()).padStart(2, '0');
+                         const mm = String(rawVal.getMinutes()).padStart(2, '0');
+                         row[connKey] = `${y}-${m}-${d} ${hh}:${mm}`;
+                    }
+                }
+
+                if (isUnused) {
+                    // 嘗試從對照表中找自訂名稱
+                    let lookupKey = snVal;
+                    if (snVal.length > 15) {
+                        lookupKey = snVal.substring(0, 15);
+                    }
+                    let customName = deviceMapping[lookupKey];
+                    row['自訂名稱'] = customName || '';
+
+                    // 建立標準化欄位供排序和顯示 (以 _std_ 開頭，下載時會過濾)
+                    row['_std_school'] = row[findKey(row, colMap.schoolName)] || '';
+                    row['_std_sn'] = snVal;
+                    row['_std_date'] = row[connKey] || '';
+                    
+                    unusedDevices.push(row);
+                }
+            });
+            
+            // 預設排序: 自訂名稱 ASC
+            currentSort = { key: '自訂名稱', order: 'asc' };
+            updateUI(totalDevices, unusedDevices.length, reportMonthStr);
+        }
+
+        function handleSort(key) {
+            if (currentSort.key === key) {
+                currentSort.order = currentSort.order === 'asc' ? 'desc' : 'asc';
+            } else {
+                currentSort.key = key;
+                currentSort.order = 'asc';
+            }
+            renderTable();
+        }
+
+        function renderTable() {
+            const tbody = document.getElementById('previewBody');
+            tbody.innerHTML = '';
+
+            // 更新表頭圖示
+            ['自訂名稱', '_std_school', '_std_sn', '_std_date'].forEach(k => {
+                const iconSpan = document.getElementById(`sort-icon-${k}`);
+                if (iconSpan) {
+                    if (currentSort.key === k) {
+                        iconSpan.innerHTML = currentSort.order === 'asc' ? '<i data-lucide="arrow-up" class="w-3 h-3"></i>' : '<i data-lucide="arrow-down" class="w-3 h-3"></i>';
+                        iconSpan.className = "text-blue-600 font-bold";
+                    } else {
+                        iconSpan.innerHTML = '<i data-lucide="arrow-up-down" class="w-3 h-3"></i>';
+                        iconSpan.className = "text-gray-400 group-hover:text-gray-600";
+                    }
+                }
+            });
+            lucide.createIcons(); // 重繪圖示
+
+            // 執行排序
+            const sortedData = [...unusedDevices].sort((a, b) => {
+                let valA = a[currentSort.key] || '';
+                let valB = b[currentSort.key] || '';
+
+                let comparison = 0;
+
+                // 特殊排序邏輯：自訂名稱 (自然排序法: A1, A2, A10)
+                if (currentSort.key === '自訂名稱') {
+                    // 沒編號的排最後
+                    if (!valA && valB) return 1;
+                    if (valA && !valB) return -1;
+                    if (!valA && !valB) return 0;
+
+                    const regex = /([A-Z]+)(\d+)/;
+                    const matchA = valA.match(regex);
+                    const matchB = valB.match(regex);
+                    
+                    if (matchA && matchB) {
+                        // 先比字母，再比數字
+                        if (matchA[1] !== matchB[1]) {
+                            comparison = matchA[1].localeCompare(matchB[1]);
+                        } else {
+                            comparison = parseInt(matchA[2]) - parseInt(matchB[2]);
+                        }
+                    } else {
+                        comparison = valA.localeCompare(valB);
+                    }
+                } else {
+                    // 一般字串排序
+                    comparison = String(valA).localeCompare(String(valB));
+                }
+
+                return currentSort.order === 'asc' ? comparison : -comparison;
+            });
+
+            // 渲染表格
+            sortedData.forEach(row => {
+                const tr = document.createElement('tr');
+                const customName = row['自訂名稱'] ? `<span class="bg-blue-100 text-blue-800 px-2 py-1 rounded font-bold">${row['自訂名稱']}</span>` : '<span class="text-gray-300">-</span>';
+                
+                tr.innerHTML = `
+                    <td class="px-4 py-3 whitespace-nowrap text-sm">${customName}</td>
+                    <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">${row['_std_school']}</td>
+                    <td class="px-4 py-3 whitespace-nowrap text-sm font-mono text-gray-500">${row['_std_sn']}</td>
+                    <td class="px-4 py-3 whitespace-nowrap text-sm text-red-500 font-medium">${row['_std_date'] || '無紀錄'}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            if (sortedData.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" class="px-6 py-4 text-center text-gray-500">太棒了！所有載具在本月都有使用紀錄。</td></tr>';
+            }
+        }
+
+        function updateUI(total, unused, reportMonthStr) {
+            document.getElementById('totalCount').textContent = total;
+            document.getElementById('unusedCount').textContent = unused;
+            const rate = total > 0 ? ((total - unused) / total * 100).toFixed(1) : 0;
+            document.getElementById('usageRate').textContent = `${rate}%`;
+            document.getElementById('listCountHint').textContent = `共 ${unused} 筆資料`;
+
+            renderTable();
+
+            resultArea.classList.remove('hidden');
+            hideError();
+            downloadBtn.onclick = () => downloadCSV(reportMonthStr);
+        }
+
+        function downloadCSV(reportMonthStr) {
+            if (unusedDevices.length === 0) { alert("沒有資料"); return; }
+            
+            // 準備下載資料：排序 + 移除內部欄位 (_std_ 開頭)
+            const sortedForDownload = [...unusedDevices].sort((a, b) => {
+                // 下載時預設用自訂名稱排序，除非你要跟隨當前畫面排序，這裡跟隨畫面
+                // ... 重複上面的排序邏輯，或直接用 renderTable 裡的 sortedData (但 scope 不同)
+                // 簡單起見，這裡預設下載時依照「自訂名稱」排序，保持一致性
+                const valA = a['自訂名稱'] || '';
+                const valB = b['自訂名稱'] || '';
+                if (!valA && valB) return 1;
+                if (valA && !valB) return -1;
+                const regex = /([A-Z]+)(\d+)/;
+                const matchA = valA.match(regex);
+                const matchB = valB.match(regex);
+                if (matchA && matchB) {
+                    if (matchA[1] !== matchB[1]) return matchA[1].localeCompare(matchB[1]);
+                    return parseInt(matchA[2]) - parseInt(matchB[2]);
+                }
+                return valA.localeCompare(valB);
+            });
+
+            const finalData = sortedForDownload.map(row => {
+                const newRow = { '自訂編號': row['自訂名稱'], ...row };
+                // 移除內部欄位和重複欄位
+                delete newRow['自訂名稱'];
+                Object.keys(newRow).forEach(k => {
+                    if (k.startsWith('_std_')) delete newRow[k];
+                });
+                return newRow;
+            });
+
+            const csv = Papa.unparse(finalData);
+            const csvData = new Blob(["\uFEFF" + csv], { type: 'text/csv;charset=utf-8;' });
+            const csvUrl = URL.createObjectURL(csvData);
+            const link = document.createElement('a');
+            link.href = csvUrl;
+            link.download = `${reportMonthStr}_未使用載具名單.csv`;
+            link.click();
+            URL.revokeObjectURL(csvUrl);
+        }
+
+        function showError(msg) {
+            errorMessage.textContent = msg;
+            errorMessage.classList.remove('hidden');
+            resultArea.classList.add('hidden');
+        }
+
+        function hideError() {
+            errorMessage.classList.add('hidden');
+        }
+    </script>
+</body>
+</html>
