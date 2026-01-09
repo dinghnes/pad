@@ -45,8 +45,9 @@
                 <div class="space-y-4">
                     <div class="space-y-2">
                         <label class="block text-sm font-medium text-gray-700 bg-gray-100 p-2 rounded">1. 選擇報表月份（基準日）</label>
-                        <input type="month" id="reportMonth" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" value="2025-12">
-                        <p class="text-xs text-gray-500">篩選出此月份 1號 之前連線的載具。</p>
+                        <!-- 移除 value 屬性，改由下方 JS 動態設定 -->
+                        <input type="month" id="reportMonth" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
+                        <p class="text-xs text-gray-500">篩選出此月份 1號 之前連線的載具 (預設為本月)。</p>
                     </div>
 
                     <div class="space-y-2">
@@ -158,6 +159,12 @@
     <script>
         // 初始化圖示
         lucide.createIcons();
+
+        // --- 設定預設月份為當前月份 ---
+        const today = new Date();
+        const yyyy = today.getFullYear();
+        const mm = String(today.getMonth() + 1).padStart(2, '0'); // 月份是 0-11，所以要 +1，並補零
+        document.getElementById('reportMonth').value = `${yyyy}-${mm}`;
 
         // --- 內建序號對照表 ---
         const builtinMapping = {
