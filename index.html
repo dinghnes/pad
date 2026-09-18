@@ -69,9 +69,10 @@
                         功能說明
                     </h3>
                     <ul class="text-sm text-blue-700 space-y-1 list-disc list-inside">
-                        <li>已內建 A1-E30 的序號對照表。</li>
-                        <li><strong>新功能：</strong>點擊下方表格的標題（如「自訂編號」）可進行排序。</li>
-                        <li>自訂編號採用智慧排序（例如 A2 會排在 A10 前面）。</li>
+                        <li><strong>全格式相容：</strong>支援「教育部載具報表」與「Google 管理後台 (Admin Console)」匯出的 CSV/Excel 清單。</li>
+                        <li><strong>智慧解析：</strong>自動辨識 lastPolicySync、mostRecentActivity、最後連線等時間欄位與 AM/PM 格式。</li>
+                        <li><strong>序號對照：</strong>已內建 A1-E30 對照表，並自動支援 Google 資產編號 (annotatedAssetId)。</li>
+                        <li><strong>自訂排序：</strong>點擊表頭標題可排序，自訂編號採用自然排序（A2 排在 A10 前面）。</li>
                     </ul>
                 </div>
             </div>
@@ -336,15 +337,50 @@
             analyzeBtn.disabled = false;
         }
 
+        function parseDeviceDate(val) {
+            if (!val) return null;
+            if (val instanceof Date) return isNaN(val.getTime()) ? null : val;
+            let s = String(val).trim();
+            if (!s) return null;
+            // 支援 Google Admin 的 date:YYYY-MM-DD durationSeconds:XXXX 格式
+            const activityMatch = s.match(/date:(\d{4}[-/]\d{1,2}[-/]\d{1,2})/);
+            if (activityMatch) {
+                s = activityMatch[1];
+            }
+            const cleanStr = s.replace(/-/g, '/');
+            const d = new Date(cleanStr);
+            if (!isNaN(d.getTime())) return d;
+            const d2 = new Date(s);
+            if (!isNaN(d2.getTime())) return d2;
+            return null;
+        }
+
+        function formatDeviceDate(d) {
+            if (!d || isNaN(d.getTime())) return '';
+            const y = d.getFullYear();
+            const m = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            const hh = String(d.getHours()).padStart(2, '0');
+            const mm = String(d.getMinutes()).padStart(2, '0');
+            return `${y}-${m}-${day} ${hh}:${mm}`;
+        }
+
         function processData(data, cutoffDate, reportMonthStr) {
             unusedDevices = [];
             let totalDevices = data.length;
             
             const colMap = {
-                lastConnection: ['最後連線', '最後連線時間', 'Last Connection', 'last_connection'],
-                schoolName: ['學校名稱', 'School Name', 'school_name'],
-                model: ['載具型號', 'Model', 'Device Model'],
+                lastConnection: [
+                    '最後連線', '最後連線時間', 'Last Connection', 'last_connection',
+                    'lastPolicySync', 'last_policy_sync', 'mostRecentActivity', 'lastIpAddressUpdate'
+                ],
+                schoolName: [
+                    '學校名稱', 'School Name', 'school_name',
+                    'orgUnitPath', 'org_unit_path', 'annotatedLocation'
+                ],
+                model: ['載具型號', 'Model', 'Device Model', 'model'],
                 sn: ['serialNumber', 'Serial Number', 'SN', '序號', 'serial_number'],
+                assetId: ['annotatedAssetId', 'Asset ID', '財產編號', '自訂編號', '資產編號']
             };
 
             const findKey = (row, keys) => keys.find(k => Object.prototype.hasOwnProperty.call(row, k));
@@ -352,56 +388,45 @@
             data.forEach(row => {
                 const connKey = findKey(row, colMap.lastConnection);
                 const snKey = findKey(row, colMap.sn);
+                const schoolKey = findKey(row, colMap.schoolName);
+                const assetKey = findKey(row, colMap.assetId);
+
                 const rawVal = connKey ? row[connKey] : null;
                 const snVal = snKey ? String(row[snKey]).trim() : "";
                 
                 let isUnused = false;
+                const deviceDate = parseDeviceDate(rawVal);
 
                 // 判斷是否使用
-                if (!rawVal) {
+                if (!deviceDate) {
                     isUnused = true;
-                } else if (typeof rawVal === 'string' && rawVal.trim() === "") {
+                } else if (deviceDate < cutoffDate) {
                     isUnused = true;
-                } else {
-                    let deviceDate;
-                    if (rawVal instanceof Date) {
-                        deviceDate = rawVal;
-                    } else {
-                        const dateStr = String(rawVal).replace(/-/g, '/'); 
-                        deviceDate = new Date(dateStr);
-                    }
-                    if (isNaN(deviceDate.getTime())) {
-                        isUnused = true; 
-                    } else if (deviceDate < cutoffDate) {
-                        isUnused = true;
-                    }
-
-                    // 格式化日期以便輸出
-                    if (connKey && !isUnused && rawVal instanceof Date) {
-                         // 已使用的我們不輸出
-                    } else if (isUnused && connKey && rawVal instanceof Date) {
-                         const y = rawVal.getFullYear();
-                         const m = String(rawVal.getMonth() + 1).padStart(2, '0');
-                         const d = String(rawVal.getDate()).padStart(2, '0');
-                         const hh = String(rawVal.getHours()).padStart(2, '0');
-                         const mm = String(rawVal.getMinutes()).padStart(2, '0');
-                         row[connKey] = `${y}-${m}-${d} ${hh}:${mm}`;
-                    }
                 }
 
                 if (isUnused) {
-                    // 嘗試從對照表中找自訂名稱
+                    // 嘗試從對照表中找自訂名稱，若無則嘗試自訂資產欄位 (如 Google Admin 的 annotatedAssetId)
                     let lookupKey = snVal;
                     if (snVal.length > 15) {
                         lookupKey = snVal.substring(0, 15);
                     }
-                    let customName = deviceMapping[lookupKey];
+                    let customName = deviceMapping[lookupKey] || (assetKey && row[assetKey] ? String(row[assetKey]).trim() : '');
                     row['自訂名稱'] = customName || '';
 
+                    // 處理學校名稱/組織路徑 (若為路徑則擷取最後一層單位名稱)
+                    let schoolVal = schoolKey ? String(row[schoolKey] || '').trim() : '';
+                    if (schoolVal.startsWith('/')) {
+                        const parts = schoolVal.split('/').filter(Boolean);
+                        schoolVal = parts[parts.length - 1] || schoolVal;
+                    }
+
+                    // 格式化顯示時間
+                    let displayDate = deviceDate ? formatDeviceDate(deviceDate) : (rawVal ? String(rawVal).trim() : '');
+
                     // 建立標準化欄位供排序和顯示 (以 _std_ 開頭，下載時會過濾)
-                    row['_std_school'] = row[findKey(row, colMap.schoolName)] || '';
+                    row['_std_school'] = schoolVal;
                     row['_std_sn'] = snVal;
-                    row['_std_date'] = row[connKey] || '';
+                    row['_std_date'] = displayDate;
                     
                     unusedDevices.push(row);
                 }
